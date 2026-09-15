@@ -1,290 +1,246 @@
-# web3-suite-payments-backend
+# web3-suite Payments Backend
 
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.3-3178C6?logo=typescript)](https://www.typescriptlang.org/)
-[![Node.js](https://img.shields.io/badge/Node.js-20-339933?logo=node.js)](https://nodejs.org/)
-[![Express](https://img.shields.io/badge/Express-4.18-000000?logo=express)](https://expressjs.com/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](./LICENSE)
-[![Stellar](https://img.shields.io/badge/Network-Stellar-08B5E5?logo=stellar)](https://stellar.org)
+![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)
+![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue.svg)
+![Express](https://img.shields.io/badge/Express-4.18-green.svg)
+![Stellar SDK](https://img.shields.io/badge/Stellar%20SDK-12.0-purple.svg)
+![Node.js](https://img.shields.io/badge/Node.js-≥18-brightgreen.svg)
 
-Backend API service for the **web3-suite** payments ecosystem. Provides RESTful endpoints for managing payment streams, invoices, and subscriptions on Stellar/Soroban, with full wallet integration and transaction signing.
-
----
+REST API backend for web3-suite payments. Bridges HTTP clients to Soroban smart contracts on the Stellar network with validation, rate limiting, and structured logging.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                      Client Applications                        │
-│                    (React Frontend, Mobile, CLI)                │
-└───────────────────────────┬─────────────────────────────────────┘
-                            │ HTTP/REST
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Express.js API Server                        │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────┐  │
-│  │  Middleware   │  │   Routes     │  │     Validation       │  │
-│  │  • Helmet    │  │  • /streams  │  │     (Zod Schemas)    │  │
-│  │  • CORS      │  │  • /invoices │  │                      │  │
-│  │  • RateLimit │  │  • /subscr.  │  │                      │  │
-│  │  • Logging   │  │              │  │                      │  │
-│  └──────┬───────┘  └──────┬───────┘  └──────────┬───────────┘  │
-│         │                 │                      │              │
-│         └─────────────────┼──────────────────────┘              │
-│                           │                                     │
-│                    ┌──────▼──────┐                              │
-│                    │  Services   │                              │
-│                    ├─────────────┤                              │
-│                    │  Stellar    │◄── RPC Client                │
-│                    │  Contracts  │◄── Contract Calls            │
-│                    └──────┬──────┘                              │
-│                           │                                     │
-└───────────────────────────┼─────────────────────────────────────┘
-                            │ Stellar RPC
-                            ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                   Stellar / Soroban Network                     │
-│                  (Payment Stream, Invoice,                      │
-│                   Subscription Contracts)                       │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────┐
+│                      Client Layer                        │
+│         (Frontend React App / Third-party API)           │
+└────────────────────────┬─────────────────────────────────┘
+                         │ HTTP/REST
+┌────────────────────────▼─────────────────────────────────┐
+│                    Express Server                        │
+│                                                          │
+│  ┌─────────┐  ┌──────────┐  ┌────────────────────────┐  │
+│  │ Helmet  │  │   CORS   │  │   Rate Limiter         │  │
+│  │ (Sec)   │  │          │  │   (100 req / 15 min)   │  │
+│  └─────────┘  └──────────┘  └────────────────────────┘  │
+│                                                          │
+│  ┌──────────────────────────────────────────────────┐    │
+│  │               Route Handlers                     │    │
+│  │  /api/streams    /api/invoices    /api/subs      │    │
+│  └────────────────────┬─────────────────────────────┘    │
+│                       │                                  │
+│  ┌────────────────────▼─────────────────────────────┐    │
+│  │            Zod Validation Layer                   │    │
+│  └────────────────────┬─────────────────────────────┘    │
+│                       │                                  │
+│  ┌────────────────────▼─────────────────────────────┐    │
+│  │           ContractService                        │    │
+│  │   (Builds Soroban transactions, signs & sends)   │    │
+│  └────────────────────┬─────────────────────────────┘    │
+│                       │                                  │
+│  ┌────────────────────▼─────────────────────────────┐    │
+│  │           StellarService                         │    │
+│  │   (Soroban RPC client, tx simulation & submit)   │    │
+│  └──────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────┘
+                         │
+              ┌──────────▼──────────┐
+              │   Stellar Network   │
+              │   (Soroban RPC)     │
+              └─────────────────────┘
 ```
-
----
 
 ## API Endpoints
 
-### Payment Streams
+### Health & Info
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/health` | Server health check |
+| GET | `/api` | API documentation |
+
+### Streams
 
 | Method | Endpoint | Description | Body |
 |--------|----------|-------------|------|
-| `GET` | `/api/streams/:id` | Get stream details | — |
-| `POST` | `/api/streams` | Create a new payment stream | `CreateStreamInput` |
-| `POST` | `/api/streams/:id/withdraw` | Withdraw available funds | `{ amount? }` |
-| `POST` | `/api/streams/:id/pause` | Pause a stream | — |
-| `POST` | `/api/streams/:id/resume` | Resume a paused stream | — |
-| `POST` | `/api/streams/:id/stop` | Stop a stream | — |
-| `GET` | `/api/streams/:id/withdrawable` | Get withdrawable amount | — |
+| GET | `/api/streams/:id` | Get stream details | - |
+| POST | `/api/streams` | Create payment stream | `{ sender, receiver, amountPerSecond, startTime, endTime }` |
+| POST | `/api/streams/:id/withdraw` | Withdraw from stream | `{ amount? }` |
+| POST | `/api/streams/:id/pause` | Pause stream | - |
+| POST | `/api/streams/:id/resume` | Resume stream | - |
+| POST | `/api/streams/:id/stop` | Stop stream | - |
+| GET | `/api/streams/:id/withdrawable` | Get withdrawable amount | - |
 
 ### Invoices
 
 | Method | Endpoint | Description | Body |
 |--------|----------|-------------|------|
-| `GET` | `/api/invoices/:id` | Get invoice details | — |
-| `POST` | `/api/invoices` | Create a new invoice | `CreateInvoiceInput` |
-| `POST` | `/api/invoices/:id/send` | Send invoice to recipient | — |
-| `POST` | `/api/invoices/:id/pay` | Pay an invoice | — |
-| `POST` | `/api/invoices/:id/cancel` | Cancel an invoice | — |
+| GET | `/api/invoices/:id` | Get invoice details | - |
+| POST | `/api/invoices` | Create invoice | `{ issuer, recipient, items, dueDate, notes? }` |
+| POST | `/api/invoices/:id/send` | Send invoice | - |
+| POST | `/api/invoices/:id/pay` | Pay invoice | - |
+| POST | `/api/invoices/:id/cancel` | Cancel invoice | - |
 
 ### Subscriptions
 
 | Method | Endpoint | Description | Body |
 |--------|----------|-------------|------|
-| `GET` | `/api/subscriptions/plans/:id` | Get plan details | — |
-| `POST` | `/api/subscriptions/plans` | Create subscription plan | `CreatePlanInput` |
-| `POST` | `/api/subscriptions/subscribe` | Subscribe to a plan | `SubscribeInput` |
-| `POST` | `/api/subscriptions/:id/billing` | Process billing cycle | — |
-| `POST` | `/api/subscriptions/:id/cancel` | Cancel subscription | — |
-| `GET` | `/api/subscriptions/:id` | Get subscription details | — |
+| GET | `/api/subscriptions/plans/:id` | Get plan details | - |
+| POST | `/api/subscriptions/plans` | Create plan | `{ creator, name, description, amount, billingInterval, intervalCount, maxSubscribers? }` |
+| POST | `/api/subscriptions/subscribe` | Subscribe to plan | `{ planId, subscriber }` |
+| POST | `/api/subscriptions/:id/billing` | Process billing | - |
+| POST | `/api/subscriptions/:id/cancel` | Cancel subscription | - |
+| GET | `/api/subscriptions/:id` | Get subscription details | - |
 
-### System
-
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| `GET` | `/health` | Health check with network info |
-| `GET` | `/api` | API documentation |
-
----
-
-## Setup Instructions
+## Setup
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) >= 18.0.0
-- [npm](https://www.npmjs.com/) or [yarn](https://yarnpkg.com/)
-- [Docker](https://www.docker.com/) (optional)
+- Node.js ≥ 18
+- npm or yarn
+- Stellar testnet account with XLM
 
-### Local Development
+### Install
 
 ```bash
-# Clone the repository
-git clone https://github.com/sudo-robi/web3-suite-payments-backend.git
-cd web3-suite-payments-backend
-
-# Install dependencies
 npm install
-
-# Copy environment variables
-cp .env.example .env
-
-# Edit .env with your configuration
-# (contract IDs, admin secret key, etc.)
-
-# Start development server
-npm run dev
-
-# The API will be available at http://localhost:3000
 ```
 
-### Build & Production
+### Configure
 
 ```bash
-# Build for production
-npm run build
+cp .env.example .env
+# Edit .env with your contract IDs and admin key
+```
 
-# Start production server
-npm start
+### Development
+
+```bash
+npm run dev          # Start with hot-reload
+npm run build        # Build for production
+npm run start        # Start production server
+npm run typecheck    # Type-check without emit
+npm test             # Run tests
 ```
 
 ### Docker
 
 ```bash
-# Build Docker image
-docker build -t web3-suite-payments-backend .
-
-# Run container
-docker run -p 3000:3000 --env-file .env web3-suite-payments-backend
-
-# Or use docker-compose (create docker-compose.yml first)
+# Build and run with docker-compose
 docker-compose up -d
-```
 
----
+# Or build manually
+docker build -t web3-suite-payments-backend .
+docker run -p 3000:3000 --env-file .env web3-suite-payments-backend
+```
 
 ## Environment Variables
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `STELLAR_NETWORK` | No | `testnet` | Stellar network (`testnet`, `mainnet`, `futurenet`) |
-| `STREAM_CONTRACT_ID` | Yes | — | Deployed payment stream contract address |
-| `INVOICE_CONTRACT_ID` | Yes | — | Deployed invoice contract address |
-| `SUBSCRIPTION_CONTRACT_ID` | Yes | — | Deployed subscription contract address |
 | `PORT` | No | `3000` | Server port |
 | `NODE_ENV` | No | `development` | Environment mode |
-| `LOG_LEVEL` | No | `info` | Logging level (`error`, `warn`, `info`, `debug`) |
+| `STELLAR_NETWORK` | No | `testnet` | Stellar network (testnet/mainnet/futurenet) |
+| `STREAM_CONTRACT_ID` | Yes | - | Deployed stream contract address |
+| `INVOICE_CONTRACT_ID` | Yes | - | Deployed invoice contract address |
+| `SUBSCRIPTION_CONTRACT_ID` | Yes | - | Deployed subscription contract address |
+| `ADMIN_SECRET_KEY` | Yes | - | Admin keypair secret for server-side transactions |
 | `CORS_ORIGIN` | No | `http://localhost:5173` | Allowed CORS origin |
-| `ADMIN_SECRET_KEY` | Yes | — | Admin keypair secret for server-side transactions |
+| `LOG_LEVEL` | No | `info` | Winston log level |
+| `RATE_LIMIT_WINDOW_MS` | No | `900000` | Rate limit window (ms) |
+| `RATE_LIMIT_MAX` | No | `100` | Max requests per window |
 
----
+## Request Validation
 
-## Request/Response Examples
+All mutating endpoints use Zod schemas for request validation:
 
-### Create a Payment Stream
-
-```bash
-curl -X POST http://localhost:3000/api/streams \
-  -H "Content-Type: application/json" \
-  -d '{
-    "sender": "GXXXXXXX...",
-    "receiver": "GYYYYYYY...",
-    "amountPerSecond": "1000000",
-    "startTime": 1700000000,
-    "endTime": 1700086400
-  }'
-```
-
-**Response:**
-```json
+```typescript
+// Example: CreateStreamSchema
 {
-  "success": true,
-  "data": {
-    "transactionHash": "abc123..."
-  },
-  "message": "Payment stream created successfully"
+  sender: string (starts with 'G', valid Stellar key),
+  receiver: string (starts with 'G', valid Stellar key),
+  amountPerSecond: string (positive integer),
+  startTime: number (positive integer),
+  endTime: number (positive integer)
 }
 ```
 
-### Create an Invoice
+Validation errors return `400` with structured error details:
 
-```bash
-curl -X POST http://localhost:3000/api/invoices \
-  -H "Content-Type: application/json" \
-  -d '{
-    "issuer": "GXXXXXXX...",
-    "recipient": "GYYYYYYY...",
-    "items": [
-      { "description": "Web Development", "amount": "5000000", "quantity": 1 },
-      { "description": "Design Review", "amount": "2000000", "quantity": 2 }
-    ],
-    "dueDate": 1700086400
-  }'
-```
-
-**Response:**
 ```json
 {
-  "success": true,
-  "data": {
-    "transactionHash": "def456..."
-  },
-  "message": "Invoice created successfully"
+  "success": false,
+  "error": "Validation failed",
+  "details": [
+    { "field": "receiver", "message": "Must be a valid Stellar public key" }
+  ]
 }
 ```
 
----
+## Error Handling
+
+All errors return structured JSON:
+
+```json
+{
+  "success": false,
+  "error": "Error message"
+}
+```
+
+| Status | Meaning |
+|--------|---------|
+| 200 | Success |
+| 201 | Created |
+| 400 | Validation error |
+| 404 | Not found |
+| 429 | Rate limit exceeded |
+| 500 | Internal server error |
 
 ## Project Structure
 
 ```
-web3-suite-payments-backend/
+backend/
 ├── src/
-│   ├── index.ts                    # Express server entry point
+│   ├── index.ts              # Express server entry
+│   ├── config.ts             # Environment configuration
 │   ├── routes/
-│   │   ├── streams.ts              # Payment stream endpoints
-│   │   ├── invoices.ts             # Invoice endpoints
-│   │   └── subscriptions.ts        # Subscription endpoints
+│   │   ├── streams.ts        # Stream endpoints
+│   │   ├── invoices.ts       # Invoice endpoints
+│   │   └── subscriptions.ts  # Subscription endpoints
 │   ├── services/
-│   │   ├── stellar.ts              # Stellar RPC client service
-│   │   └── contracts.ts            # Smart contract interaction service
+│   │   ├── stellar.ts        # Stellar RPC client wrapper
+│   │   └── contracts.ts      # Soroban contract interaction
 │   ├── types/
-│   │   └── index.ts                # TypeScript types and Zod schemas
+│   │   └── index.ts          # Zod schemas + TypeScript types
 │   ├── middleware/
-│   │   └── validation.ts           # Request validation middleware
+│   │   └── validation.ts     # Zod validation middleware
 │   └── utils/
-│       └── logger.ts               # Winston logger configuration
-├── package.json
-├── tsconfig.json
-├── Dockerfile
-├── .env.example
-├── .gitignore
-├── LICENSE
-└── README.md
+│       └── logger.ts         # Winston logger
+├── Dockerfile                # Multi-stage Docker build
+├── docker-compose.yml        # Docker Compose config
+├── .env.example              # Environment template
+├── tsconfig.json             # TypeScript config
+├── package.json              # Dependencies
+└── README.md                 # This file
 ```
-
----
-
-## Security Features
-
-- **Helmet** — Sets secure HTTP headers
-- **CORS** — Configurable cross-origin resource sharing
-- **Rate Limiting** — Prevents abuse (100 requests / 15 minutes)
-- **Input Validation** — Zod schemas validate all request bodies
-- **Structured Logging** — Winston with JSON output for production
-- **Docker** — Non-root user, health checks, multi-stage build
-
----
 
 ## Contributing
 
-Contributions are welcome! Please follow these steps:
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** your changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to the branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ### Development Guidelines
 
-- Use TypeScript strict mode
 - Write tests for new endpoints
-- Follow RESTful conventions
-- Validate all inputs with Zod
-- Run `npm run lint` and `npm run typecheck` before committing
-- Keep functions focused and under 30 lines
-
----
+- Use Zod schemas for all input validation
+- Follow TypeScript strict mode conventions
+- Use structured logging (Winston) for all operations
+- Handle errors gracefully with proper HTTP status codes
 
 ## License
 
-This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
+MIT License - see [LICENSE](../LICENSE) for details.
